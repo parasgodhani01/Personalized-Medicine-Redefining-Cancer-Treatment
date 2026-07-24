@@ -1,0 +1,224 @@
+# .github/workflows/ci_cd.yml
+# ─────────────────────────────────────────────────────────────
+# Full CI/CD Pipeline:
+#
+# Trigger: Every push to main or a PR
+#
+# Jobs:
+#   1. test     → Run pytest (gate — stops everything if tests fail)
+#   2. train    → Train model, log to MLflow (only on push to main)
+#   3. build    → Build Docker image, push to AWS ECR
+#   4. deploy   → SSH into EC2, pull latest image, restart container
+#
+# SECRETS you must add in GitHub → Settings → Secrets:
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#   AWS_REGION            (e.g. us-east-1)
+#   ECR_REGISTRY          (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)
+#   ECR_REPOSITORY        (e.g. cancer-classifier)
+#   EC2_HOST              (your EC2 public IP or DNS)
+#   EC2_USER              (usually ec2-user or ubuntu)
+#   EC2_SSH_KEY           (private key content — paste full PEM)
+#   MLFLOW_TRACKING_URI   (e.g. http://your-mlflow-server:5000)
+# ─────────────────────────────────────────────────────────────
+
+name: CI/CD — Cancer Classifier
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  IMAGE_TAG: ${{ github.sha }}   # unique tag per commit — enables easy rollback
+
+jobs:
+
+  # ── JOB 1: TESTS ───────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip              # cache pip deps between runs — speeds up CI
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --tb=short
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+      # WHY this step: enforce a minimum coverage threshold
+      # If coverage drops below 70%, the build fails
+      - name: Check coverage threshold
+        run: |
+          pip install coverage
+          coverage report --fail-under=70 || (echo "Coverage below 70%!" && exit 1)
+
+  # ── JOB 2: TRAIN & LOG TO MLFLOW ───────────────────────────
+  # Only runs on push to main (not PRs) — don't waste training time on PRs
+  train:
+    name: Train & Log to MLflow
+    runs-on: ubuntu-latest
+    needs: test                 # only train if tests pass
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Download dataset from S3 (you upload it once, never commit data to git)
+      - name: Download dataset from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws s3 cp s3://your-bucket-name/data/training_variants.csv data/training_variants.csv
+          aws s3 cp s3://your-bucket-name/data/training_text.csv     data/training_text.csv
+
+      - name: Train model and log to MLflow
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          cd src
+          python train.py \
+            --variants ../data/training_variants.csv \
+            --text     ../data/training_text.csv
+
+      # Upload mlruns to S3 (so it persists between CI runs if not using remote MLflow)
+      - name: Sync MLflow artifacts to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws s3 sync mlruns/ s3://your-bucket-name/mlruns/
+
+  # ── JOB 3: BUILD & PUSH DOCKER IMAGE ───────────────────────
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: train
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    outputs:
+      image_uri: ${{ steps.build-image.outputs.image_uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image
+        id: build-image
+        env:
+          ECR_REGISTRY:   ${{ secrets.ECR_REGISTRY }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          LATEST_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          docker build -t "$IMAGE_URI" -t "$LATEST_URI" .
+
+          docker push "$IMAGE_URI"
+          docker push "$LATEST_URI"
+
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built and pushed: $IMAGE_URI"
+
+  # ── JOB 4: DEPLOY TO EC2 ───────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy via SSH to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:       ${{ secrets.EC2_HOST }}
+          username:   ${{ secrets.EC2_USER }}
+          key:        ${{ secrets.EC2_SSH_KEY }}
+          # WHY script approach: Simple, auditable, no Kubernetes complexity.
+          # For larger scale, replace this with ECS service update.
+          script: |
+            # Login to ECR from the EC2 instance
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
+              | docker login --username AWS \
+                --password-stdin ${{ secrets.ECR_REGISTRY }}
+
+            # Pull the new image
+            docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:latest
+
+            # Graceful stop old container (wait up to 30s)
+            docker stop cancer-classifier || true
+            docker rm   cancer-classifier || true
+
+            # Start new container
+            docker run -d \
+              --name cancer-classifier \
+              --restart unless-stopped \
+              -p 80:8000 \
+              -e MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }} \
+              -e MODEL_NAME=cancer-classifier \
+              -e MODEL_STAGE=Production \
+              ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:latest
+
+            # Health check — wait for server to be ready
+            echo "Waiting for server to start..."
+            sleep 10
+            curl -f http://localhost/health \
+              && echo "✓ Deployment successful!" \
+              || (echo "✗ Health check failed!" && exit 1)
+
+      - name: Post deployment notification
+        if: success()
+        run: |
+          echo "🚀 Deployment successful!"
+          echo "Image: ${{ needs.build.outputs.image_uri }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Actor: ${{ github.actor }}"
