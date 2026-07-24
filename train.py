@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")          # headless backend — needed in CI/CD (no display)
 import matplotlib.pyplot as plt
 
+import tempfile
 import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
@@ -89,7 +90,7 @@ def plot_confusion_matrix(y_true, y_pred, model_name: str) -> str:
                                   display_labels=[f"C{i+1}" for i in range(9)])
     disp.plot(ax=ax, colorbar=True, cmap="Blues")
     ax.set_title(f"Confusion Matrix — {model_name}")
-    path = f"/tmp/cm_{model_name.replace(' ', '_')}.png"
+    path = os.path.join(tempfile.gettempdir(), f"cm_{model_name.replace(' ', '_')}.png")
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close()
@@ -137,7 +138,7 @@ def train_and_log(model, model_name: str, params: dict,
             y_test, y_pred,
             target_names=[f"Class {i+1}" for i in range(9)]
         )
-        report_path = f"/tmp/report_{model_name.replace(' ', '_')}.txt"
+        report_path = os.path.join(tempfile.gettempdir(), f"report_{model_name.replace(' ', '_')}.txt")
         with open(report_path, "w") as f:
             f.write(report)
         mlflow.log_artifact(report_path, artifact_path="reports")
@@ -146,7 +147,7 @@ def train_and_log(model, model_name: str, params: dict,
         # WHY: The model is USELESS without the same transformers used at train time.
         # Always version them together.
         for name, vec in transformers.items():
-            vec_path = f"/tmp/{name}.joblib"
+            vec_path = os.path.join(tempfile.gettempdir(), f"{name}.joblib")    
             joblib.dump(vec, vec_path)
             mlflow.log_artifact(vec_path, artifact_path="transformers")
 
@@ -196,7 +197,7 @@ def main(variants_path: str, text_path: str):
     experiments = [
         (
             LogisticRegression(C=1.0, max_iter=500, solver="saga",
-                               multi_class="multinomial", random_state=RANDOM_STATE, n_jobs=-1),
+                               random_state=RANDOM_STATE, n_jobs=-1),
             "Logistic Regression",
             {"C": 1.0, "max_iter": 500, "solver": "saga"},
         ),

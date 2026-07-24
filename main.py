@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import mlflow
-import mlflow.pyfunc
+import mlflow.sklearn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
 
     try:
         model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
-        _model    = mlflow.pyfunc.load_model(model_uri)
+        _model    = mlflow.sklearn.load_model(model_uri)
         print(f"  [✓] Model loaded from: {model_uri}")
     except Exception as e:
         print(f"  [!] Could not load from registry: {e}")
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
             if runs:
                 run_id    = runs[0].info.run_id
                 model_uri = f"runs:/{run_id}/model"
-                _model    = mlflow.pyfunc.load_model(model_uri)
+                _model    = mlflow.sklearn.load_model(model_uri)
                 print(f"  [✓] Loaded best run model: {run_id}")
 
                 # Load transformers from that run's artifacts
@@ -187,10 +187,10 @@ def predict(request: PredictionRequest):
     X_var  = _var_tfidf.transform([request.variation.lower()])
     X      = hstack([X_text, X_gene, X_var])
 
-    # Convert sparse matrix to dense for pyfunc model
-    probabilities = _model.predict(X)
+    # sklearn model loaded directly — predict_proba returns all class probabilities
+    probabilities = _model.predict_proba(X)
 
-    # Handle both ndarray and DataFrame outputs from mlflow.pyfunc
+    # Handle both ndarray and DataFrame outputs
     if hasattr(probabilities, "values"):
         probabilities = probabilities.values
     probabilities = np.array(probabilities).flatten()
