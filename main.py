@@ -31,7 +31,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 from preprocess import build_combined_feature
 
 # ── CONFIG ────────────────────────────────────────────────────
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "mlruns")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 MODEL_NAME          = os.getenv("MODEL_NAME", "cancer-classifier")
 MODEL_STAGE         = os.getenv("MODEL_STAGE", "Production")   # or "latest"
 TRANSFORMERS_DIR    = os.getenv("TRANSFORMERS_DIR", "/app/transformers")
@@ -60,7 +60,10 @@ _var_tfidf   = None
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan handler — replaces deprecated @app.on_event("startup").
-    Load the model from MLflow once when the server starts.
+    Load the model from MLflow once when the server starts, then load the
+    matching transformers from whichever run produced that model — whether
+    we got the model via the registry (Production stage) or the fallback
+    (latest run search).
     """
     global _model, _tfidf, _gene_tfidf, _var_tfidf
 
@@ -70,16 +73,23 @@ async def lifespan(app: FastAPI):
     print(f"  Stage        : {MODEL_STAGE}")
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = mlflow.tracking.MlflowClient()
+
+    run_id = None
 
     try:
         model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
         _model    = mlflow.sklearn.load_model(model_uri)
         print(f"  [✓] Model loaded from: {model_uri}")
+
+        # Find the run that produced this registered version, so we can
+        # load the matching transformers (they MUST match the model exactly)
+        versions = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
+        run_id = versions[0].run_id
+
     except Exception as e:
         print(f"  [!] Could not load from registry: {e}")
         print(f"  [!] Falling back to local 'latest' run...")
-        # Fallback: load from latest run artifact (useful in dev/testing)
-        client = mlflow.tracking.MlflowClient()
         experiment = client.get_experiment_by_name("personalized-medicine")
         if experiment:
             runs = client.search_runs(
@@ -93,16 +103,18 @@ async def lifespan(app: FastAPI):
                 _model    = mlflow.sklearn.load_model(model_uri)
                 print(f"  [✓] Loaded best run model: {run_id}")
 
-                # Load transformers from that run's artifacts
-                artifacts_path = mlflow.artifacts.download_artifacts(
-                    run_id=run_id, artifact_path="transformers"
-                )
-                _tfidf      = joblib.load(os.path.join(artifacts_path, "tfidf.joblib"))
-                _gene_tfidf = joblib.load(os.path.join(artifacts_path, "gene_tfidf.joblib"))
-                _var_tfidf  = joblib.load(os.path.join(artifacts_path, "var_tfidf.joblib"))
-                print(f"  [✓] Transformers loaded from run artifacts")
+    # Load transformers from whichever run_id we ended up with
+    # (works whether the model came from the registry or the fallback)
+    if run_id:
+        artifacts_path = mlflow.artifacts.download_artifacts(
+            run_id=run_id, artifact_path="transformers"
+        )
+        _tfidf      = joblib.load(os.path.join(artifacts_path, "tfidf.joblib"))
+        _gene_tfidf = joblib.load(os.path.join(artifacts_path, "gene_tfidf.joblib"))
+        _var_tfidf  = joblib.load(os.path.join(artifacts_path, "var_tfidf.joblib"))
+        print(f"  [✓] Transformers loaded from run artifacts")
 
-    # Load transformers from disk if not already loaded via MLflow
+    # Fallback: load transformers from disk if still not loaded
     if _tfidf is None and os.path.exists(TRANSFORMERS_DIR):
         _tfidf      = joblib.load(os.path.join(TRANSFORMERS_DIR, "tfidf.joblib"))
         _gene_tfidf = joblib.load(os.path.join(TRANSFORMERS_DIR, "gene_tfidf.joblib"))
