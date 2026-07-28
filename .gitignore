@@ -5,3 +5,4 @@ data/
 mlruns/
 *.joblib
 .env
+mlruns_old_backup/
