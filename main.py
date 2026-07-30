@@ -82,8 +82,6 @@ async def lifespan(app: FastAPI):
         _model    = mlflow.sklearn.load_model(model_uri)
         print(f"  [✓] Model loaded from: {model_uri}")
 
-        # Find the run that produced this registered version, so we can
-        # load the matching transformers (they MUST match the model exactly)
         versions = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
         run_id = versions[0].run_id
 
@@ -103,8 +101,6 @@ async def lifespan(app: FastAPI):
                 _model    = mlflow.sklearn.load_model(model_uri)
                 print(f"  [✓] Loaded best run model: {run_id}")
 
-    # Load transformers from whichever run_id we ended up with
-    # (works whether the model came from the registry or the fallback)
     if run_id:
         artifacts_path = mlflow.artifacts.download_artifacts(
             run_id=run_id, artifact_path="transformers"
@@ -114,7 +110,6 @@ async def lifespan(app: FastAPI):
         _var_tfidf  = joblib.load(os.path.join(artifacts_path, "var_tfidf.joblib"))
         print(f"  [✓] Transformers loaded from run artifacts")
 
-    # Fallback: load transformers from disk if still not loaded
     if _tfidf is None and os.path.exists(TRANSFORMERS_DIR):
         _tfidf      = joblib.load(os.path.join(TRANSFORMERS_DIR, "tfidf.joblib"))
         _gene_tfidf = joblib.load(os.path.join(TRANSFORMERS_DIR, "gene_tfidf.joblib"))
@@ -191,7 +186,6 @@ def predict(request: PredictionRequest):
     if _tfidf is None:
         raise HTTPException(status_code=503, detail="Transformers not loaded.")
 
-    # Build features — MUST use the same logic as training
     combined = build_combined_feature(request.gene, request.variation, request.clinical_text)
 
     X_text = _tfidf.transform([combined])
@@ -199,16 +193,14 @@ def predict(request: PredictionRequest):
     X_var  = _var_tfidf.transform([request.variation.lower()])
     X      = hstack([X_text, X_gene, X_var])
 
-    # sklearn model loaded directly — predict_proba returns all class probabilities
     probabilities = _model.predict_proba(X)
 
-    # Handle both ndarray and DataFrame outputs
     if hasattr(probabilities, "values"):
         probabilities = probabilities.values
     probabilities = np.array(probabilities).flatten()
 
     predicted_idx   = int(np.argmax(probabilities))
-    predicted_class = predicted_idx + 1   # back to 1-indexed
+    predicted_class = predicted_idx + 1
     confidence      = float(probabilities[predicted_idx])
 
     all_probs = [

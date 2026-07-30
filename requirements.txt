@@ -12,3 +12,4 @@ joblib
 boto3
 pytest
 pytest-cov
+mysql-connector-python
