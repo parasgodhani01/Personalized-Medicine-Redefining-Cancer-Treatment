@@ -117,7 +117,7 @@ class TestModelOutput:
     """
 
     def setup_method(self):
-        from sklearn.linear_model import LogisticRegression
+        from sklearn.linear_model import LogisticRegression 
         from sklearn.datasets import make_classification
         X, y = make_classification(
             n_samples=200, n_features=20, n_classes=9,
