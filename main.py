@@ -21,14 +21,45 @@ from typing import Optional
 
 import mlflow
 import mlflow.sklearn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from scipy.sparse import hstack
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import time
 
 # Add src/ to path so we can import preprocess
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 from preprocess import build_combined_feature
+
+# ── PROMETHEUS METRICS ───────────────────────────────────────
+# Counter: monotonically increasing count (requests, errors)
+# Histogram: buckets of observed values (latency) — gives us
+# percentiles (p50/p95/p99) when queried in Prometheus/Grafana.
+
+REQUEST_COUNT = Counter(
+    "api_requests_total",
+    "Total number of requests received",
+    ["endpoint", "method", "status_code"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "api_request_latency_seconds",
+    "Request latency in seconds",
+    ["endpoint"]
+)
+
+PREDICTION_CLASS_COUNT = Counter(
+    "predictions_by_class_total",
+    "Count of predictions made per mutation class",
+    ["predicted_class"]
+)
+
+PREDICTION_CONFIDENCE = Histogram(
+    "prediction_confidence",
+    "Confidence score distribution of predictions",
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
 
 # ── CONFIG ────────────────────────────────────────────────────
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
@@ -165,6 +196,15 @@ def root():
     return {"status": "running", "model": MODEL_NAME, "stage": MODEL_STAGE}
 
 
+@app.get("/metrics", tags=["Monitoring"])
+def metrics():
+    """
+    Prometheus scrapes this endpoint on a schedule (e.g. every 10s).
+    Returns all counters/histograms in Prometheus's plain-text format.
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/health", tags=["Health"])
 def health():
     model_loaded = _model is not None
@@ -181,46 +221,64 @@ def predict(request: PredictionRequest):
     Predict the mutation class for a given gene, variation, and clinical text.
     Returns predicted class + confidence + all 9 class probabilities.
     """
-    if _model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded. Check server logs.")
-    if _tfidf is None:
-        raise HTTPException(status_code=503, detail="Transformers not loaded.")
+    start_time = time.time()
+    status_code = "200"
 
-    combined = build_combined_feature(request.gene, request.variation, request.clinical_text)
+    try:
+        if _model is None:
+            status_code = "503"
+            raise HTTPException(status_code=503, detail="Model not loaded. Check server logs.")
+        if _tfidf is None:
+            status_code = "503"
+            raise HTTPException(status_code=503, detail="Transformers not loaded.")
 
-    X_text = _tfidf.transform([combined])
-    X_gene = _gene_tfidf.transform([request.gene.lower()])
-    X_var  = _var_tfidf.transform([request.variation.lower()])
-    X      = hstack([X_text, X_gene, X_var])
+        combined = build_combined_feature(request.gene, request.variation, request.clinical_text)
 
-    probabilities = _model.predict_proba(X)
+        X_text = _tfidf.transform([combined])
+        X_gene = _gene_tfidf.transform([request.gene.lower()])
+        X_var  = _var_tfidf.transform([request.variation.lower()])
+        X      = hstack([X_text, X_gene, X_var])
 
-    if hasattr(probabilities, "values"):
-        probabilities = probabilities.values
-    probabilities = np.array(probabilities).flatten()
+        probabilities = _model.predict_proba(X)
 
-    predicted_idx   = int(np.argmax(probabilities))
-    predicted_class = predicted_idx + 1
-    confidence      = float(probabilities[predicted_idx])
+        if hasattr(probabilities, "values"):
+            probabilities = probabilities.values
+        probabilities = np.array(probabilities).flatten()
 
-    all_probs = [
-        ClassProbability(
-            class_id=i + 1,
-            class_name=CLASS_DESCRIPTIONS.get(i + 1, f"Class {i+1}"),
-            probability=round(float(p), 4),
+        predicted_idx   = int(np.argmax(probabilities))
+        predicted_class = predicted_idx + 1
+        confidence      = float(probabilities[predicted_idx])
+
+        all_probs = [
+            ClassProbability(
+                class_id=i + 1,
+                class_name=CLASS_DESCRIPTIONS.get(i + 1, f"Class {i+1}"),
+                probability=round(float(p), 4),
+            )
+            for i, p in enumerate(probabilities)
+        ]
+        all_probs.sort(key=lambda x: x.probability, reverse=True)
+
+        # Record prediction-specific metrics
+        PREDICTION_CLASS_COUNT.labels(predicted_class=str(predicted_class)).inc()
+        PREDICTION_CONFIDENCE.observe(confidence)
+
+        return PredictionResponse(
+            predicted_class=predicted_class,
+            predicted_class_name=CLASS_DESCRIPTIONS.get(predicted_class, f"Class {predicted_class}"),
+            confidence=round(confidence, 4),
+            all_probabilities=all_probs,
+            gene=request.gene,
+            variation=request.variation,
         )
-        for i, p in enumerate(probabilities)
-    ]
-    all_probs.sort(key=lambda x: x.probability, reverse=True)
-
-    return PredictionResponse(
-        predicted_class=predicted_class,
-        predicted_class_name=CLASS_DESCRIPTIONS.get(predicted_class, f"Class {predicted_class}"),
-        confidence=round(confidence, 4),
-        all_probabilities=all_probs,
-        gene=request.gene,
-        variation=request.variation,
-    )
+    except HTTPException as e:
+        status_code = str(e.status_code)
+        raise
+    finally:
+        # Always record request count + latency, success or failure
+        duration = time.time() - start_time
+        REQUEST_LATENCY.labels(endpoint="/predict").observe(duration)
+        REQUEST_COUNT.labels(endpoint="/predict", method="POST", status_code=status_code).inc()
 
 
 @app.get("/model/info", tags=["Model"])
