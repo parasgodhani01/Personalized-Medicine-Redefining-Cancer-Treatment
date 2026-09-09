@@ -2,15 +2,7 @@
 # ─────────────────────────────────────────────────────────────
 # FastAPI inference server.
 #
-# WHY FastAPI over Flask?
-#   - Async support (handles concurrent prediction requests)
-#   - Auto-generates OpenAPI docs at /docs
-#   - Pydantic validation catches bad inputs before they hit the model
-#   - Production-grade, used by Uber, Netflix, etc.
-#
-# The model is loaded ONCE at startup from MLflow Model Registry.
-# This is the correct pattern — not loading on every request.
-# ─────────────────────────────────────────────────────────────
+
 
 import os
 import sys
