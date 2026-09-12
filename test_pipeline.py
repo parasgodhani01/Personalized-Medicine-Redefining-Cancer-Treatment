@@ -1,11 +1,3 @@
-# tests/test_pipeline.py
-# ─────────────────────────────────────────────────────────────
-# WHY tests matter in ML pipelines:
-# CI/CD should REFUSE to deploy if tests fail.
-# These tests act as a gate — they catch regressions
-# before bad code ever reaches production.
-# ─────────────────────────────────────────────────────────────
-
 import sys
 import os
 import pytest
@@ -16,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from preprocess import clean_text, build_combined_feature
 
 
-# ── PREPROCESSING TESTS ───────────────────────────────────────
+# PREPROCESSING TESTS 
 
 class TestCleanText:
 
@@ -72,7 +64,7 @@ class TestBuildCombinedFeature:
         assert "r1699q" in result
 
 
-# ── FEATURE ENGINEERING TESTS ─────────────────────────────────
+# FEATURE ENGINEERING TESTS 
 
 class TestFeatureEngineering:
     """
@@ -108,8 +100,7 @@ class TestFeatureEngineering:
         assert X.max() <= 1.0
 
 
-# ── MODEL OUTPUT TESTS ────────────────────────────────────────
-
+# MODEL OUTPUT TESTS 
 class TestModelOutput:
     """
     Test model output structure (probabilities, class count).
@@ -146,7 +137,7 @@ class TestModelOutput:
         assert all(0 <= p <= 8 for p in predictions)
 
 
-# ── DATA VALIDATION TESTS ─────────────────────────────────────
+# DATA VALIDATION TESTS
 
 class TestDataValidation:
     """

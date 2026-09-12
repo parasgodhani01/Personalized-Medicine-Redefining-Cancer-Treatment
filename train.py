@@ -1,21 +1,10 @@
-# src/train.py
-# ─────────────────────────────────────────────────────────────
-# Full training pipeline with MLflow experiment tracking.
-#
-# What MLflow gives us:
-#   - Every run is logged: params, metrics, artifacts, model
-#   - You can compare runs in a UI (mlflow ui)
-#   - The best model gets registered in the MLflow Model Registry
-#   - FastAPI loads the model FROM the registry — no manual file copying
-# ─────────────────────────────────────────────────────────────
-
 import os
 import argparse
 import joblib
 import pandas as pd
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")          # headless backend — needed in CI/CD (no display)
+matplotlib.use("Agg")          
 import matplotlib.pyplot as plt
 
 import tempfile
@@ -32,14 +21,14 @@ from sklearn.metrics import log_loss, classification_report, confusion_matrix, C
 from scipy.sparse import hstack, save_npz
 import xgboost as xgb
 
-from preprocess import build_combined_feature   # our shared utility
+from preprocess import build_combined_feature   
 
-# ── CONFIG ────────────────────────────────────────────────────
+# CONFIG 
 RANDOM_STATE    = 42
 TEST_SIZE       = 0.2
 TFIDF_MAX_FEAT  = 10_000
 EXPERIMENT_NAME = "personalized-medicine"
-MODEL_NAME      = "cancer-classifier"          # name in MLflow Model Registry
+MODEL_NAME      = "cancer-classifier"         
 
 np.random.seed(RANDOM_STATE)
 
@@ -104,17 +93,14 @@ def train_and_log(model, model_name: str, params: dict,
     Train one model, log everything to MLflow, optionally register it.
     """
     with mlflow.start_run(run_name=model_name):
-        # ── Log hyperparameters ──────────────────────────────
         mlflow.log_params(params)
         mlflow.log_param("tfidf_max_features", TFIDF_MAX_FEAT)
         mlflow.log_param("test_size", TEST_SIZE)
         mlflow.log_param("random_state", RANDOM_STATE)
 
-        # ── Train ────────────────────────────────────────────
-        print(f"\n  ▶ Training {model_name}...")
+        print(f"\n  Training {model_name}...")
         model.fit(X_train, y_train)
 
-        # ── Metrics ──────────────────────────────────────────
         y_train_proba = model.predict_proba(X_train)
         y_test_proba  = model.predict_proba(X_test)
         y_pred        = model.predict(X_test)
@@ -129,11 +115,9 @@ def train_and_log(model, model_name: str, params: dict,
         print(f"    Train Log Loss: {train_logloss:.4f}")
         print(f"    Test  Log Loss: {test_logloss:.4f}")
 
-        # ── Artifacts: confusion matrix plot ─────────────────
         cm_path = plot_confusion_matrix(y_test, y_pred, model_name)
         mlflow.log_artifact(cm_path, artifact_path="plots")
 
-        # ── Log classification report as text artifact ────────
         report = classification_report(
             y_test, y_pred,
             target_names=[f"Class {i+1}" for i in range(9)]
@@ -143,16 +127,11 @@ def train_and_log(model, model_name: str, params: dict,
             f.write(report)
         mlflow.log_artifact(report_path, artifact_path="reports")
 
-        # ── Log vectorizers as artifacts ──────────────────────
-        # WHY: The model is USELESS without the same transformers used at train time.
-        # Always version them together.
         for name, vec in transformers.items():
             vec_path = os.path.join(tempfile.gettempdir(), f"{name}.joblib")    
             joblib.dump(vec, vec_path)
             mlflow.log_artifact(vec_path, artifact_path="transformers")
 
-        # ── Log the model ─────────────────────────────────────
-        # Infer signature so MLflow knows input/output schema
         sample_input  = X_test[:5]
         sample_output = model.predict_proba(sample_input)
 
@@ -168,21 +147,18 @@ def train_and_log(model, model_name: str, params: dict,
             )
 
         run_id = mlflow.active_run().info.run_id
-        print(f"    [✓] MLflow run logged: {run_id}")
+        print(f" MLflow run logged: {run_id}")
 
     return test_logloss, run_id
 
 
 def main(variants_path: str, text_path: str):
-    # ── Setup MLflow experiment ───────────────────────────────
-    # MLFLOW_TRACKING_URI can be set as env var to point to a remote server
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "mlruns")
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(EXPERIMENT_NAME)
     print(f"\n  MLflow tracking URI : {tracking_uri}")
     print(f"  Experiment          : {EXPERIMENT_NAME}")
 
-    # ── Load & Feature Engineering ───────────────────────────
     print("\n  Loading data...")
     df = load_data(variants_path, text_path)
     print(f"  Dataset shape: {df.shape}")
@@ -193,7 +169,6 @@ def main(variants_path: str, text_path: str):
         X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
     )
 
-    # ── Define Models + Their Params ─────────────────────────
     experiments = [
         (
             LogisticRegression(C=1.0, max_iter=500, solver="saga",
@@ -218,7 +193,6 @@ def main(variants_path: str, text_path: str):
         ),
     ]
 
-    # ── Train all, find best ──────────────────────────────────
     run_results = []
     for model, name, params in experiments:
         logloss, run_id = train_and_log(
@@ -228,7 +202,6 @@ def main(variants_path: str, text_path: str):
         )
         run_results.append((logloss, name, model, params, run_id))
 
-    # ── Re-register best model ────────────────────────────────
     best_logloss, best_name, best_model, best_params, _ = min(run_results, key=lambda x: x[0])
     print(f"\n Best Model: {best_name} (Log Loss: {best_logloss:.4f})")
     print(f"  Registering '{MODEL_NAME}' in MLflow Model Registry...")
@@ -240,7 +213,7 @@ def main(variants_path: str, text_path: str):
     )
 
     print(f"\n  Run 'mlflow ui' to explore all experiments in the browser.")
-    print(f"  Done ✓")
+    print(f"  Done ")
 
 
 if __name__ == "__main__":

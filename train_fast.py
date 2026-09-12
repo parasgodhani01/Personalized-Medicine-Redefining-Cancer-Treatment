@@ -1,15 +1,3 @@
-# train_fast.py
-# ─────────────────────────────────────────────────────────────
-# Quick verification script — trains ONLY Logistic Regression
-# (our known best model) and registers it, skipping Random
-# Forest and XGBoost to save time while we verify the Docker
-# artifact-serving fix actually works.
-#
-# Once confirmed working, you can go back to the full train.py
-# for a "real" comparison run later if you want that in your
-# portfolio history.
-# ─────────────────────────────────────────────────────────────
-
 import os
 import argparse
 from sklearn.model_selection import train_test_split
@@ -51,7 +39,7 @@ def main(variants_path: str, text_path: str):
         transformers, is_best=True   # registers it immediately
     )
 
-    print(f"\n  Done ✓  (test_log_loss={logloss:.4f}, run_id={run_id})")
+    print(f"\n  Done - (test_log_loss={logloss:.4f}, run_id={run_id})")
 
 
 if __name__ == "__main__":

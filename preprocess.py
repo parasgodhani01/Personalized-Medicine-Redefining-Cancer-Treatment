@@ -1,14 +1,5 @@
-# preprocess.py
-# ─────────────────────────────────────────────────────────────
-# Shared text cleaning used by BOTH train.py and main.py.
-# CRITICAL: this must produce IDENTICAL output at train time and
-# inference time, or the model will see features it wasn't trained on.
-# ─────────────────────────────────────────────────────────────
-
 import re
 
-# Small fixed stopword list — no external download (nltk requires a
-# runtime download step that breaks in CI/offline environments).
 STOPWORDS = {
     "the", "is", "a", "an", "in", "on", "at", "of", "to", "for",
     "and", "or", "but", "with", "as", "by", "from", "that", "this",
@@ -30,7 +21,7 @@ def clean_text(text) -> str:
         return ""
 
     text = text.lower()
-    text = re.sub(r"[^a-z\s]", " ", text)   # drop digits + punctuation/special chars
+    text = re.sub(r"[^a-z\s]", " ", text)   
     words = text.split()
     words = [w for w in words if w not in STOPWORDS]
     return " ".join(words)

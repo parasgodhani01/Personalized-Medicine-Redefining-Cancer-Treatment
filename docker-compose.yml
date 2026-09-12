@@ -1,6 +1,6 @@
 services:
 
-  # ── MLflow Tracking Server ───────────────────────────────
+  # MLflow Tracking Server 
   mlflow:
     build:
       context: .
@@ -18,7 +18,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── FastAPI Inference API ────────────────────────────────
+  # FastAPI Inference API 
   api:
     build:
       context: .
@@ -34,7 +34,7 @@ services:
     ports:
       - "8000:8000"
 
-  # ── Prometheus ───────────────────────────────────────────
+  # Prometheus 
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus-server
@@ -55,7 +55,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── Grafana ──────────────────────────────────────────────
+  # Grafana
   grafana:
     image: grafana/grafana:latest
     container_name: grafana-dashboards

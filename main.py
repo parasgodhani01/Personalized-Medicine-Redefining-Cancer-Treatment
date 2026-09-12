@@ -1,9 +1,3 @@
-# app/main.py
-# ─────────────────────────────────────────────────────────────
-# FastAPI inference server.
-#
-
-
 import os
 import sys
 import joblib
@@ -17,17 +11,14 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from scipy.sparse import hstack
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST # type: ignore
 import time
 
-# Add src/ to path so we can import preprocess
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 from preprocess import build_combined_feature
 
-# ── PROMETHEUS METRICS ───────────────────────────────────────
-# Counter: monotonically increasing count (requests, errors)
-# Histogram: buckets of observed values (latency) — gives us
-# percentiles (p50/p95/p99) when queried in Prometheus/Grafana.
+# PROMETHEUS METRICS
 
 REQUEST_COUNT = Counter(
     "api_requests_total",
@@ -53,7 +44,7 @@ PREDICTION_CONFIDENCE = Histogram(
     buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 )
 
-# ── CONFIG ────────────────────────────────────────────────────
+# CONFIG 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 MODEL_NAME          = os.getenv("MODEL_NAME", "cancer-classifier")
 MODEL_STAGE         = os.getenv("MODEL_STAGE", "Production")   # or "latest"
@@ -70,15 +61,12 @@ CLASS_DESCRIPTIONS = {
     8: "Likely Switch-of-function",
     9: "Switch-of-function",
 }
-
-# Global model + transformers (loaded once at startup)
 _model       = None
 _tfidf       = None
 _gene_tfidf  = None
 _var_tfidf   = None
 
 
-# ── LIFESPAN: Load model at startup ──────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -103,7 +91,7 @@ async def lifespan(app: FastAPI):
     try:
         model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
         _model    = mlflow.sklearn.load_model(model_uri)
-        print(f"  [✓] Model loaded from: {model_uri}")
+        print(f"  [OK] Model loaded from: {model_uri}")
 
         versions = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
         run_id = versions[0].run_id
@@ -122,7 +110,7 @@ async def lifespan(app: FastAPI):
                 run_id    = runs[0].info.run_id
                 model_uri = f"runs:/{run_id}/model"
                 _model    = mlflow.sklearn.load_model(model_uri)
-                print(f"  [✓] Loaded best run model: {run_id}")
+                print(f"  [OK] Loaded best run model: {run_id}")
 
     if run_id:
         artifacts_path = mlflow.artifacts.download_artifacts(
@@ -131,20 +119,20 @@ async def lifespan(app: FastAPI):
         _tfidf      = joblib.load(os.path.join(artifacts_path, "tfidf.joblib"))
         _gene_tfidf = joblib.load(os.path.join(artifacts_path, "gene_tfidf.joblib"))
         _var_tfidf  = joblib.load(os.path.join(artifacts_path, "var_tfidf.joblib"))
-        print(f"  [✓] Transformers loaded from run artifacts")
+        print(f"  [OK] Transformers loaded from run artifacts")
 
     if _tfidf is None and os.path.exists(TRANSFORMERS_DIR):
         _tfidf      = joblib.load(os.path.join(TRANSFORMERS_DIR, "tfidf.joblib"))
         _gene_tfidf = joblib.load(os.path.join(TRANSFORMERS_DIR, "gene_tfidf.joblib"))
         _var_tfidf  = joblib.load(os.path.join(TRANSFORMERS_DIR, "var_tfidf.joblib"))
-        print(f"  [✓] Transformers loaded from {TRANSFORMERS_DIR}")
+        print(f"  [OK] Transformers loaded from {TRANSFORMERS_DIR}")
 
-    print("[STARTUP] Server ready ✓\n")
+    print("[STARTUP] Server ready\n")
     yield
     print("[SHUTDOWN] Cleaning up...")
 
 
-# ── FASTAPI APP ───────────────────────────────────────────────
+# FASTAPI APP 
 app = FastAPI(
     title="Personalized Medicine — Cancer Mutation Classifier",
     description="Classifies genetic mutations into 9 classes using NLP + ML",
@@ -160,7 +148,7 @@ app.add_middleware(
 )
 
 
-# ── REQUEST / RESPONSE SCHEMAS ────────────────────────────────
+#  REQUEST / RESPONSE SCHEMAS 
 class PredictionRequest(BaseModel):
     gene: str = Field(..., example="BRCA1", description="Gene name")
     variation: str = Field(..., example="R1699Q", description="Variation identifier")
@@ -182,7 +170,7 @@ class PredictionResponse(BaseModel):
     variation: str
 
 
-# ── ROUTES ────────────────────────────────────────────────────
+# ROUTES 
 @app.get("/", tags=["Health"])
 def root():
     return {"status": "running", "model": MODEL_NAME, "stage": MODEL_STAGE}
@@ -267,7 +255,7 @@ def predict(request: PredictionRequest):
         status_code = str(e.status_code)
         raise
     finally:
-        # Always record request count + latency, success or failure
+        # record request count + latency, success or failure
         duration = time.time() - start_time
         REQUEST_LATENCY.labels(endpoint="/predict").observe(duration)
         REQUEST_COUNT.labels(endpoint="/predict", method="POST", status_code=status_code).inc()

@@ -1,25 +1,12 @@
-# promote_model.py
-# ─────────────────────────────────────────────────────────────
-# Promotes the LATEST registered version of cancer-classifier
-# to the "Production" stage — no need to hardcode a version
-# number, which changes every time you retrain.
-#
-# Usage:
-#   python promote_model.py
-# ─────────────────────────────────────────────────────────────
-
 import os
 import mlflow
 
-# Point at the same tracking server main.py / docker-compose use.
-# Override with an env var if needed, e.g. for local sqlite testing.
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MODEL_NAME   = "cancer-classifier"
 
 mlflow.set_tracking_uri(TRACKING_URI)
 client = mlflow.tracking.MlflowClient()
 
-# Find the latest version registered, regardless of its current stage.
 all_versions = client.search_model_versions(f"name='{MODEL_NAME}'")
 
 if not all_versions:
@@ -36,7 +23,7 @@ client.transition_model_version_stage(
     name=MODEL_NAME,
     version=latest_version.version,
     stage="Production",
-    archive_existing_versions=True,  # old "Production" versions get archived, not left dangling
+    archive_existing_versions=True,  
 )
 
-print(f"✓ Promoted v{latest_version.version} of '{MODEL_NAME}' to Production")
+print(f"Promoted v{latest_version.version} of '{MODEL_NAME}' to Production")

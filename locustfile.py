@@ -1,15 +1,11 @@
-# locustfile.py
-# ─────────────────────────────────────────────────────────────
 # Load test for the cancer mutation classifier /predict endpoint.
 # Run with: locust -f locustfile.py --host http://localhost:8000
 # Then open http://localhost:8089 to configure and start the test.
-# ─────────────────────────────────────────────────────────────
+
 
 from locust import HttpUser, task, between
 import random
 
-# A few varied realistic payloads so we're not hammering the exact
-# same cached-friendly input every time.
 SAMPLE_REQUESTS = [
     {
         "gene": "BRCA1",
@@ -35,8 +31,6 @@ SAMPLE_REQUESTS = [
 
 
 class PredictUser(HttpUser):
-    # Wait 1-3 seconds between requests per simulated user —
-    # mimics realistic traffic instead of hammering nonstop.
     wait_time = between(1, 3)
 
     @task

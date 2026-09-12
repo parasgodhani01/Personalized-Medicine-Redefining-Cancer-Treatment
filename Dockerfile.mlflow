@@ -1,9 +1,3 @@
-# Dockerfile.mlflow
-# ─────────────────────────────────────────────────────────────
-# Dedicated MLflow tracking server container.
-# Both training (later) and the API talk to this over HTTP,
-# instead of sharing a raw SQLite file across containers.
-# ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
 RUN pip install --no-cache-dir mlflow==3.14.0

@@ -1,10 +1,3 @@
--- init.sql
--- ─────────────────────────────────────────────────────────────
--- Runs automatically the FIRST time the MySQL container starts
--- (via Docker's docker-entrypoint-initdb.d mechanism).
--- Creates the table that logs every /predict call.
--- ─────────────────────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS predictions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     request_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
