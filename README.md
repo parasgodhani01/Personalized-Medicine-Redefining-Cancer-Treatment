@@ -21,32 +21,32 @@ Grafana) that production ML systems use in industry.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Training (local)                                        │
-│  train.py → scikit-learn (LogReg / RF / XGBoost)         │
-│  TF-IDF feature engineering on clinical text + gene/var   │
-└───────────────────────┬───────────────────────────────────┘
+│  Training (local)                                       │
+│  train.py → scikit-learn (LogReg / RF / XGBoost)        │
+│  TF-IDF feature engineering on clinical text + gene/var │
+└───────────────────────┬─────────────────────────────────┘
                          │ logs experiments, registers best model
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  MLflow Tracking Server        (Docker container)         │
-│  • Experiment tracking, model registry                    │
-│  • Proxied artifact storage (client uploads via HTTP)      │
-└───────────────────────┬───────────────────────────────────┘
+│  MLflow Tracking Server        (Docker container)       │
+│  • Experiment tracking, model registry                  │
+│  • Proxied artifact storage (client uploads via HTTP)   │
+└───────────────────────┬─────────────────────────────────┘
                          │ loads "Production" model at startup
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  FastAPI Inference API         (Docker container)          │
-│  • POST /predict — classification + confidence            │
-│  • GET  /health  — liveness check                         │
-│  • GET  /metrics — Prometheus-format instrumentation       │
-└───────────────────────┬───────────────────────────────────┘
+│  FastAPI Inference API         (Docker container)       │
+│  • POST /predict — classification + confidence          │
+│  • GET  /health  — liveness check                       │
+│  • GET  /metrics — Prometheus-format instrumentation    │
+└───────────────────────┬─────────────────────────────────┘
                          │ scraped every 15s
                          ▼
-┌─────────────────────────────────────────────────────────┐
-│  Prometheus (native)  →  Grafana (native)                  │
-│  • Request rate, p95/p99 latency                           │
-│  • Prediction class distribution, confidence distribution  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐ 
+│  Prometheus (native)  →  Grafana (native)                │
+│  • Request rate, p95/p99 latency                         │
+│  • Prediction class distribution, confidence distribution│
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## What's Working
