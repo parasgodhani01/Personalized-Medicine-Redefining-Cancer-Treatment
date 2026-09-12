@@ -1,237 +1,110 @@
-# 🧬 Personalized Medicine — Cancer Mutation Classifier
-> End-to-End MLOps: Training → MLflow → CI/CD → AWS Deployment
+# Personalized Medicine - Cancer Mutation Classifier
+
+
+A production-style ML system that classifies genetic mutations into 9 clinical
+categories from the MSK "Personalized Medicine: Redefining Cancer Treatment"
+Kaggle dataset — built to prove real MLOps engineering judgment, not just
+model accuracy.
+
+
+## Why This Project Exists
+
+Most ML portfolio projects stop at "I trained a model and got X% accuracy."
+This one goes further: it trains a model, **registers** it, **serves** it
+behind a real API, **containerizes** the whole stack, **load-tests** it under
+concurrency, and **monitors** it live with the same tools (Prometheus +
+Grafana) that production ML systems use in industry.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                     YOUR LAPTOP                          │
-│  src/train.py ──► MLflow (tracks experiments + models)  │
-└────────────────────┬────────────────────────────────────┘
-                     │ git push
-┌────────────────────▼────────────────────────────────────┐
-│              GITHUB ACTIONS (CI/CD)                      │
-│  1. pytest  2. Train + MLflow  3. Docker build + ECR    │
-└────────────────────┬────────────────────────────────────┘
-                     │ deploy
-┌────────────────────▼────────────────────────────────────┐
-│                   AWS (Production)                        │
-│  ECR (image registry) ──► EC2 (FastAPI + MLflow model)  │
+│  Training (local)                                        │
+│  train.py → scikit-learn (LogReg / RF / XGBoost)         │
+│  TF-IDF feature engineering on clinical text + gene/var   │
+└───────────────────────┬───────────────────────────────────┘
+                         │ logs experiments, registers best model
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  MLflow Tracking Server        (Docker container)         │
+│  • Experiment tracking, model registry                    │
+│  • Proxied artifact storage (client uploads via HTTP)      │
+└───────────────────────┬───────────────────────────────────┘
+                         │ loads "Production" model at startup
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  FastAPI Inference API         (Docker container)          │
+│  • POST /predict — classification + confidence            │
+│  • GET  /health  — liveness check                         │
+│  • GET  /metrics — Prometheus-format instrumentation       │
+└───────────────────────┬───────────────────────────────────┘
+                         │ scraped every 15s
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  Prometheus (native)  →  Grafana (native)                  │
+│  • Request rate, p95/p99 latency                           │
+│  • Prediction class distribution, confidence distribution  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 📁 Project Structure
+## What's Working
 
-```
-personalized-medicine/
-├── src/
-│   ├── train.py          # Training pipeline with MLflow tracking
-│   └── preprocess.py     # Shared text cleaning (used by train + API)
-├── app/
-│   └── main.py           # FastAPI inference server
-├── tests/
-│   └── test_pipeline.py  # Unit tests (CI gate)
-├── scripts/
-│   └── aws_setup.sh      # One-time EC2 setup
-├── .github/
-│   └── workflows/
-│       └── ci_cd.yml     # Full CI/CD pipeline
-├── Dockerfile            # Multi-stage production build
-├── requirements.txt
-└── README.md
-```
+- **Training pipeline** — 3 models trained and compared (Logistic Regression
+  won on test log-loss: 1.0028 vs 1.1356 RF vs 1.3396 XGBoost); MLflow tracks
+  every run and manages the registry.
+- **Containerized serving** — `mlflow` + `api` services via Docker Compose,
+  stable in continuous operation for 6+ days.
+- **Load testing** — Locust-driven concurrency tests up to 50 simultaneous
+  users: **p95 latency 49ms, 0 failures across ~4,000 requests.** Identified
+  and explained a cold-start latency pattern (first ~30s of traffic only —
+  same phenomenon as AWS Lambda cold starts), distinguishing it from a real
+  bottleneck.
+- **Live monitoring** — Prometheus scrapes custom metrics (request count,
+  latency histogram, prediction class distribution, confidence distribution)
+  from the API; Grafana renders real-time dashboards proven against live
+  traffic, not mock data.
+- **23 unit tests** covering the training/inference pipeline.
 
 ---
 
-## 🚀 Quick Start (Local)
+## Load Test Results
 
-### 1. Install dependencies
-```bash
-pip install -r requirements.txt
-```
+| Concurrency | Requests | Failures | Median | p95 | p99* |
+|---|---|---|---|---|---|
+| 10 users | 292 | 0 | 17ms | 30ms | 2100ms* |
+| 50 users | 1,997 | 0 | 18ms | 49ms | 2100ms* |
 
-### 2. Download dataset
-From [Kaggle](https://www.kaggle.com/c/msk-redefining-cancer-treatment/data):
-- `training_variants.csv`
-- `training_text.csv`
+\* *p99/max latency spikes were isolated entirely to the first ~30 seconds of
+each test run (confirmed via Locust's response-time chart) — a one-time
+cold-start cost from lazy model/library initialization, not a sustained
+bottleneck. Real-world mitigation: send warm-up requests immediately after
+deployment, before opening traffic to real users.*
 
-Place both in `data/`.
-
-### 3. Train with MLflow tracking
-```bash
-cd src
-python train.py --variants ../data/training_variants.csv --text ../data/training_text.csv
-```
-
-### 4. View experiments in MLflow UI
-```bash
-mlflow ui   # opens http://localhost:5000
-```
-
-### 5. Run tests
-```bash
-pytest tests/ -v
-```
-
-### 6. Run FastAPI locally
-```bash
-uvicorn app.main:app --reload --port 8000
-# Docs at: http://localhost:8000/docs
-```
+**SLA achieved:** p95 < 100ms, sustained, at up to 50 concurrent users, zero
+failures across ~4,000 requests.
 
 ---
 
-## 🐳 Docker
-
-```bash
-# Build
-docker build -t cancer-classifier .
-
-# Run
-docker run -d \
-  -p 8000:8000 \
-  -e MLFLOW_TRACKING_URI=http://your-mlflow-server:5000 \
-  --name cancer-classifier \
-  cancer-classifier
-
-# Test
-curl http://localhost:8000/health
-```
-
----
-
-## ☁️ AWS Setup
-
-### Step 1 — Launch EC2
-- AMI: Amazon Linux 2023 or Ubuntu 22.04
-- Instance type: `t3.medium` (minimum for this model)
-- Storage: 20GB gp3
-
-### Step 2 — Run setup script
-```bash
-chmod +x scripts/aws_setup.sh
-./scripts/aws_setup.sh
-```
-
-### Step 3 — Create ECR Repository
-```bash
-aws ecr create-repository --repository-name cancer-classifier --region us-east-1
-```
-
-### Step 4 — Upload data to S3 (one time)
-```bash
-aws s3 cp data/training_variants.csv s3://your-bucket-name/data/
-aws s3 cp data/training_text.csv     s3://your-bucket-name/data/
-```
-
-### Step 5 — Add GitHub Secrets
-Go to: GitHub → Your Repo → Settings → Secrets and variables → Actions
-
-| Secret | Description |
-|--------|-------------|
-| `AWS_ACCESS_KEY_ID` | IAM user access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
-| `AWS_REGION` | e.g. `us-east-1` |
-| `ECR_REGISTRY` | e.g. `123456789.dkr.ecr.us-east-1.amazonaws.com` |
-| `ECR_REPOSITORY` | `cancer-classifier` |
-| `EC2_HOST` | Your EC2 public IP |
-| `EC2_USER` | `ec2-user` or `ubuntu` |
-| `EC2_SSH_KEY` | Full content of your `.pem` file |
-| `MLFLOW_TRACKING_URI` | `http://YOUR_EC2_IP:5000` |
-
-### Step 6 — Push to main → CI/CD runs automatically
-```bash
-git push origin main
-```
-
----
-
-## 🔬 API Usage
-
-### Predict mutation class
-```bash
-curl -X POST http://YOUR_EC2_IP/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "gene": "BRCA1",
-    "variation": "R1699Q",
-    "clinical_text": "The BRCA1 gene plays a critical role in DNA repair via homologous recombination..."
-  }'
-```
-
-**Response:**
-```json
-{
-  "predicted_class": 4,
-  "predicted_class_name": "Loss-of-function",
-  "confidence": 0.7823,
-  "all_probabilities": [
-    {"class_id": 4, "class_name": "Loss-of-function", "probability": 0.7823},
-    {"class_id": 1, "class_name": "Likely Loss-of-function", "probability": 0.1124},
-    ...
-  ],
-  "gene": "BRCA1",
-  "variation": "R1699Q"
-}
-```
-
-### Health check
-```bash
-curl http://YOUR_EC2_IP/health
-```
-
-### Interactive API docs
-```
-http://YOUR_EC2_IP/docs
-```
-
----
-
-## 📊 MLflow Experiment Tracking
-
-Every training run logs:
-- **Parameters**: model type, TF-IDF settings, hyperparameters
-- **Metrics**: train log loss, test log loss, overfit gap
-- **Artifacts**: confusion matrix plots, classification reports, vectorizers
-- **Model**: versioned in the Model Registry
-
-Access MLflow UI: `http://YOUR_MLFLOW_SERVER:5000`
-
----
-
-## 🧪 CI/CD Flow
+## Repository Structure
 
 ```
-git push main
-     │
-     ▼
-[pytest]  ──── FAIL ──► ✗ Pipeline stops. No deploy.
-     │
-   PASS
-     │
-     ▼
-[train.py] → logs to MLflow
-     │
-     ▼
-[docker build] → push to ECR
-     │
-     ▼
-[EC2 deploy] → pull image → restart container → health check
-     │
-     ▼
-  ✓ Live!
+├── data/                      # training_variants.csv, training_text.csv
+├── main.py                    # FastAPI inference server
+├── train.py                   # Training pipeline (3-model comparison)
+├── train_fast.py              # Quick single-model retrain for verification
+├── preprocess.py               # Shared text-cleaning / feature-building
+├── promote_model.py            # Auto-promotes latest MLflow version to Production
+├── test_pipeline.py             # 23 unit tests
+├── locustfile.py                # Load testing scenarios
+├── LOAD_TEST_RESULTS.md         # Documented load test findings
+├── Dockerfile                  # FastAPI service image
+├── Dockerfile.mlflow            # MLflow tracking server image
+├── docker-compose.yml           # 2-service orchestration (mlflow + api)
+├── init.sql                    # MySQL schema (designed, not yet wired in)
+├── prometheus.yml               # Prometheus scrape config
+├── aws_setup.sh                 # EC2 provisioning script (scaffolding)
+├── ci_cd.yml                    # GitHub Actions pipeline (scaffolding)
+└── requirements.txt
 ```
-
----
-
-## ⬆️ Next Steps (Level Up)
-
-| What | Why |
-|------|-----|
-| Replace TF-IDF with BioBERT embeddings | Richer semantic features for clinical text |
-| Add class_weight='balanced' to LR | Handle class 7 dominance |
-| Add Prometheus + Grafana metrics | Monitor prediction latency and drift |
-| Swap EC2 for ECS Fargate | Auto-scaling, no server management |
-| Add model drift detection | Retrain automatically when data distribution shifts |
