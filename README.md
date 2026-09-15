@@ -76,16 +76,6 @@ Grafana) that production ML systems use in industry.
 |---|---|---|---|---|---|
 | 10 users | 292 | 0 | 17ms | 30ms | 2100ms* |
 | 50 users | 1,997 | 0 | 18ms | 49ms | 2100ms* |
-
-\* *p99/max latency spikes were isolated entirely to the first ~30 seconds of
-each test run (confirmed via Locust's response-time chart) — a one-time
-cold-start cost from lazy model/library initialization, not a sustained
-bottleneck. Real-world mitigation: send warm-up requests immediately after
-deployment, before opening traffic to real users.*
-
-**SLA achieved:** p95 < 100ms, sustained, at up to 50 concurrent users, zero
-failures across ~4,000 requests.
-
 ---
 
 ## Repository Structure
